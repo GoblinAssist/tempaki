@@ -1,0 +1,47 @@
+# Tempo planner configuration.
+# Everything that can realistically change over time lives here, not in code.
+#
+# Copy this file to config.toml (git-ignored) and fill in your own values.
+# Credentials are NOT here - they live in a separate .env file (see env_file
+# below and ../.env.example).
+
+# Path to the .env file holding API credentials, resolved relative to this file.
+env_file = "../.env"
+
+# Calendar dates with no expected work (public holidays, PTO, ...).
+# On these days the target hours drop to zero and default meetings are
+# not requested. Dates use ISO format (YYYY-MM-DD).
+free_days = ["2026-01-01", "2026-12-25"]
+
+[working_day]
+# Hard boundaries - no worklog is ever scheduled outside this window.
+start = "08:00"
+end = "18:00"
+target_hours = 8.0
+# All slots start, end and last a multiple of this many minutes.
+min_slot_minutes = 15
+
+[cache]
+path = ".cache/worklogs.json"
+ttl_minutes = 15
+
+[issues]
+# Jira keys used for the two recurring "default" activities.
+meetings = "PROJ-1"
+support = "PROJ-2"
+# Project prefix assumed when only a number is typed at the task prompt.
+default_project = "PROJ"
+
+# Recurring meeting blocks. days: mon tue wed thu fri sat sun
+# Optional per-block "issue" overrides issues.meetings.
+[[meetings]]
+name = "Daily standup"
+days = ["mon", "tue", "wed", "thu", "fri"]
+start = "10:30"
+end = "11:00"
+
+[[meetings]]
+name = "Weekly sync"
+days = ["mon"]
+start = "16:00"
+end = "17:00"

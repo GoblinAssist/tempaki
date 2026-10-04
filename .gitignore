@@ -1,0 +1,22 @@
+# Real credentials - never commit these
+.env
+src/config.toml
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# Local cache/state
+.cache/
+src/.cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

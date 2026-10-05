@@ -7,8 +7,13 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-Nothing yet — see [ROADMAP.md](ROADMAP.md) for the planned v0.2 (read-only
-Jira ticket browsing).
+### Added
+
+- `--tasks` to list all Jira issues assigned to the authenticated user
+- Jira client support for creating issues and updating issue summaries and descriptions
+
+Interactive Jira browsing and CLI commands for creating or editing issues remain
+planned; see [ROADMAP.md](ROADMAP.md).
 
 ## [0.1.0] - 2026-09-28
 

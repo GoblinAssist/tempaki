@@ -101,6 +101,18 @@ class JiraClient:
             raise ApiError(f"Jira API error ({response.status_code}): {response.text[:300]}")
         return response.json()
 
+    def _write(self, method: str, path: str, body: dict) -> dict:
+        response = self._session.request(
+            method,
+            f"{self._credentials.jira_url}{path}",
+            json=body,
+            auth=self._auth,
+            headers={"Accept": "application/json", "Content-Type": "application/json"},
+        )
+        if response.status_code >= 300:
+            raise ApiError(f"Jira API error ({response.status_code}): {response.text[:300]}")
+        return response.json() if response.content else {}
+
     def account_id(self) -> str:
         if self._account_id is None:
             self._account_id = self._get("/rest/api/3/myself")["accountId"]
@@ -112,6 +124,67 @@ class JiraClient:
         if key not in self._issue_cache:
             self._remember(self._get(f"/rest/api/3/issue/{key}", params={"fields": "summary,status"}))
         return self._issue_cache[key]
+
+    def create_issue(
+        self,
+        project_key: str,
+        summary: str,
+        description: str = "",
+        issue_type: str = "Task",
+    ) -> IssueInfo:
+        """Create a Jira issue and return its resolved details."""
+        fields = {
+            "project": {"key": project_key.strip().upper()},
+            "issuetype": {"name": issue_type},
+            "summary": summary.strip(),
+        }
+        if description:
+            fields["description"] = self._description_document(description)
+        created = self._write("POST", "/rest/api/3/issue", {"fields": fields})
+        return self.get_issue(created["key"])
+
+    def update_issue(
+        self,
+        issue_key: str,
+        summary: str | None = None,
+        description: str | None = None,
+    ) -> IssueInfo:
+        """Update an issue's summary and/or plain-text description."""
+        fields = {}
+        if summary is not None:
+            fields["summary"] = summary.strip()
+        if description is not None:
+            fields["description"] = self._description_document(description)
+        if not fields:
+            raise ValueError("At least one issue field must be provided")
+        key = issue_key.strip().upper()
+        self._write("PUT", f"/rest/api/3/issue/{key}", {"fields": fields})
+        self._issue_cache.pop(key, None)
+        return self.get_issue(key)
+
+    @staticmethod
+    def _description_document(description: str) -> dict:
+        paragraphs = [
+            {"type": "paragraph", "content": [{"type": "text", "text": line}]}
+            for line in description.splitlines()
+        ]
+        return {"type": "doc", "version": 1, "content": paragraphs}
+
+    def list_assigned_issues(self) -> list[IssueInfo]:
+        """List all issues assigned to the authenticated Jira user."""
+        issues: list[IssueInfo] = []
+        params = {
+            "jql": "assignee = currentUser() ORDER BY updated DESC",
+            "fields": "summary,status",
+            "maxResults": 100,
+        }
+        while True:
+            payload = self._get("/rest/api/3/search/jql", params=params)
+            issues.extend(self._remember(item) for item in payload.get("issues", []))
+            next_page_token = payload.get("nextPageToken")
+            if payload.get("isLast", not next_page_token) or not next_page_token:
+                return issues
+            params["nextPageToken"] = next_page_token
 
     def issue_key_by_id(self, issue_id: int) -> str:
         """Tempo returns numeric issue ids only; map them back to human keys."""

@@ -175,6 +175,21 @@ class PlannerApp:
         console.print(table)
         console.print(f"Total planned: [bold]{minutes_to_hours(total):.2f}h[/bold]")
 
+    def show_tasks(self) -> None:
+        """List all Jira issues assigned to the authenticated user."""
+        issues = self._jira.list_assigned_issues()
+        if not issues:
+            console.print("[yellow]No Jira issues are assigned to you.[/yellow]")
+            return
+
+        table = Table(title=f"Jira issues assigned to you ({len(issues)})", header_style="bold")
+        table.add_column("Key", no_wrap=True)
+        table.add_column("Status", no_wrap=True)
+        table.add_column("Summary", overflow="fold")
+        for issue in issues:
+            table.add_row(issue.key, issue.status, issue.summary)
+        console.print(table)
+
     # -- phase 2 ---------------------------------------------------------
     def fill_default_meetings(self) -> None:
         pending: dict[date, list[Entry]] = {}
@@ -462,6 +477,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--week", help="Any date (YYYY-MM-DD) inside the target week; defaults to today")
     parser.add_argument("--day", help="Show what is logged on this date (YYYY-MM-DD) and exit")
     parser.add_argument("--activities", help="Show Tempo planned activities for this date (YYYY-MM-DD) and exit")
+    parser.add_argument("--tasks", action="store_true", help="List all Jira issues assigned to you and exit")
     parser.add_argument("--config", type=Path, help="Path to config.toml")
     parser.add_argument("--refresh", action="store_true", help="Ignore the local cache")
     parser.add_argument("--dry-run", action="store_true", help="Show what would be logged, POST nothing")
@@ -489,6 +505,9 @@ def main(argv: list[str] | None = None) -> int:
         app = PlannerApp(config, tempo, jira, dry_run=args.dry_run)
         if args.activities:
             app.show_planned(datetime.strptime(args.activities, "%Y-%m-%d").date())
+            return 0
+        if args.tasks:
+            app.show_tasks()
             return 0
         if target_day:
             app.load_week(target_day, refresh=args.refresh)

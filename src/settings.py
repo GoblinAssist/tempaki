@@ -68,6 +68,8 @@ class AppConfig:
     default_project: str
     meeting_blocks: tuple[MeetingBlock, ...]
     free_days: frozenset[date]
+    sprint_board_id: int | None
+    default_component: str | None
 
     def blocks_for(self, day: date) -> tuple[MeetingBlock, ...]:
         return tuple(sorted(
@@ -93,6 +95,7 @@ class AppConfig:
         day_cfg = raw.get("working_day") or {}
         cache_cfg = raw.get("cache") or {}
         issues = raw.get("issues") or {}
+        sprint_cfg = raw.get("sprint") or {}
 
         window = Interval(
             parse_hhmm(day_cfg.get("start", "08:00")),
@@ -119,6 +122,8 @@ class AppConfig:
             default_project=(issues.get("default_project") or support_issue.split("-")[0]).upper(),
             meeting_blocks=cls._parse_blocks(raw.get("meetings") or [], meetings_issue, window, path),
             free_days=cls._parse_free_days(raw.get("free_days") or [], path),
+            sprint_board_id=int(sprint_cfg["board_id"]) if sprint_cfg.get("board_id") is not None else None,
+            default_component=issues.get("default_component"),
         )
 
     @staticmethod

@@ -31,6 +31,13 @@ meetings = "PROJ-1"
 support = "PROJ-2"
 # Project prefix assumed when only a number is typed at the task prompt.
 default_project = "PROJ"
+# Default component applied to new issues when --components isn't given.
+default_component = "Team A"
+
+[sprint]
+# Optional. Jira Agile board id used by `--create-task --sprint` to look up
+# the currently active sprint and add the new issue to it.
+board_id = 1
 
 # Recurring meeting blocks. days: mon tue wed thu fri sat sun
 # Optional per-block "issue" overrides issues.meetings.

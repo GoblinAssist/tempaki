@@ -42,6 +42,14 @@ python3 cli.py --day 2026-08-12   # read-only: what is logged on that day
 python3 cli.py --tasks            # list all Jira issues assigned to you
 python3 cli.py --task PROJ-123    # show details for one Jira issue
 python3 cli.py --task PROJ-123 PROJ-456  # show details for selected issues
+python3 cli.py --create-task --project PROJ --summary "Title" --description "Details" --type Task
+python3 cli.py --create-task --project PROJ --summary "Title" --sprint  # also add to the active sprint
+python3 cli.py --update PROJ-123 --status "In Progress"  # transition an existing issue
+python3 cli.py --update PROJ-123 --assignee me           # reassign an existing issue
+python3 cli.py --update PROJ-123 --parent PROJ-100       # set the parent issue
+python3 cli.py --assignable PROJ-123                     # list accounts assignable to this issue
+python3 cli.py --list-components PROJ                    # list components configured for the project
+python3 cli.py --update PROJ-123 --components ComponentSample # set issue component(s)
 python3 cli.py --refresh          # ignore the local cache
 python3 cli.py --dry-run          # never POST to Tempo
 ```
@@ -50,7 +58,7 @@ python3 cli.py --dry-run          # never POST to Tempo
 
 - [ ] Browse/search Jira tickets and pick one to log time against
 - [ ] Validate ticket setup (assignee, component/version present)
-- [ ] Create new tickets / edit summary & description
+- [x] Create new tickets / edit summary & description
 - [ ] Update ticket status
 
 ## Security

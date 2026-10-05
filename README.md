@@ -39,6 +39,7 @@ cd src
 python3 cli.py                    # plan the current week
 python3 cli.py --week 2026-08-03  # any date inside the target week
 python3 cli.py --day 2026-08-12   # read-only: what is logged on that day
+python3 cli.py --tasks            # list all Jira issues assigned to you
 python3 cli.py --refresh          # ignore the local cache
 python3 cli.py --dry-run          # never POST to Tempo
 ```

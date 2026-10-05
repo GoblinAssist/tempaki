@@ -9,6 +9,15 @@ Usage:
     python3 cli.py --refresh          # ignore the local cache
     python3 cli.py --dry-run          # never POST to Tempo
     python3 cli.py --clear-cache
+    python3 cli.py --create-task --project PROJ --summary "..." --description "..." --type Task
+    python3 cli.py --create-task --project PROJ --summary "..." --sprint  # also add to the active sprint
+    python3 cli.py --create-task --project PROJ --summary "..." --assignee none  # created unassigned (default: assigned to you)
+    python3 cli.py --update PROJ-123 --status "In Progress"
+    python3 cli.py --update PROJ-123 --assignee me
+    python3 cli.py --update PROJ-123 --parent PROJ-100
+    python3 cli.py --assignable PROJ-123
+    python3 cli.py --list-components PROJ
+    python3 cli.py --update PROJ-123 --components Component1
 """
 from __future__ import annotations
 
@@ -190,6 +199,136 @@ class PlannerApp:
             table.add_row(issue.key, issue.status, issue.summary)
         console.print(table)
 
+    def show_assignable_users(self, issue_key: str | None = None, project_key: str | None = None) -> None:
+        """List Jira accounts that can be assigned to this issue or project."""
+        users = self._jira.list_assignable_users(project_key=project_key, issue_key=issue_key)
+        label = issue_key.strip().upper() if issue_key else project_key.strip().upper()
+        if not users:
+            console.print(f"[yellow]No assignable users found for {label}.[/yellow]")
+            return
+        table = Table(title=f"Assignable accounts for {label} ({len(users)})", header_style="bold")
+        table.add_column("Account ID", no_wrap=True)
+        table.add_column("Display name")
+        table.add_column("Email", overflow="fold")
+        for user in users:
+            table.add_row(user.get("accountId", "-"), user.get("displayName", "-"), user.get("emailAddress") or "-")
+        console.print(table)
+
+    def show_components(self, project_key: str) -> None:
+        """List the components configured for a Jira project."""
+        components = self._jira.list_components(project_key)
+        if not components:
+            console.print(f"[yellow]No components found for project {project_key.strip().upper()}.[/yellow]")
+            return
+        table = Table(title=f"Components for {project_key.strip().upper()} ({len(components)})", header_style="bold")
+        table.add_column("ID", no_wrap=True)
+        table.add_column("Name")
+        for component in components:
+            table.add_row(component.get("id", "-"), component.get("name", "-"))
+        console.print(table)
+
+    def _resolve_assignee(
+        self,
+        assignee: str | None,
+        project_key: str | None = None,
+        issue_key: str | None = None,
+    ) -> str | None:
+        """Turn 'me'/None/a name-or-email into an accountId verified as assignable, or None.
+
+        Verifies the account directly against Jira's assignable-users check for
+        `project_key`/`issue_key` (rather than a possibly-truncated listing)
+        before returning it, so we never send an accountId Jira would reject.
+        """
+        if not assignee or assignee.casefold() in {"none", "unassigned"}:
+            return None
+        if assignee.casefold() == "me":
+            account_id = self._jira.account_id()
+            if not self._jira.is_assignable(account_id, project_key=project_key, issue_key=issue_key):
+                raise ApiError(f"You ({account_id}) are not assignable to this issue/project")
+            return account_id
+        return self._jira.find_account_id(assignee, project_key=project_key, issue_key=issue_key)
+
+    def create_task(
+        self,
+        project_key: str,
+        summary: str,
+        description: str = "",
+        issue_type: str = "Task",
+        add_to_sprint: bool = False,
+        assignee: str | None = "me",
+        parent_key: str | None = None,
+        components: list[str] | None = None,
+    ) -> None:
+        """Create a new Jira issue, optionally placing it in the current active sprint."""
+        account_id = self._resolve_assignee(assignee, project_key=project_key)
+        components = components or ([self._config.default_component] if self._config.default_component else None)
+        resolved_components = (
+            self._jira.resolve_component_names(project_key, components) if components else None
+        )
+        issue = self._jira.create_issue(
+            project_key=project_key,
+            summary=summary,
+            description=description,
+            issue_type=issue_type,
+            assignee_account_id=account_id,
+            component_names=resolved_components,
+        )
+        console.print(f"[green]Created {issue.key}[/green]: {issue.summary}")
+
+        # Many "Create Issue" screens omit the Assignee field, so Jira can silently
+        # drop it from the creation payload; assign explicitly as a follow-up to
+        # guarantee it actually takes (mirrors how parent/components are applied).
+        if account_id:
+            self._jira.assign_issue(issue.key, account_id, verify=False)
+            console.print(f"[green]{issue.key} assignee set to[/green]: {assignee}")
+
+        if resolved_components:
+            console.print(f"[green]{issue.key} components set to[/green]: {', '.join(resolved_components)}")
+
+        if parent_key:
+            self._jira.set_parent(issue.key, parent_key)
+            console.print(f"[green]{issue.key} parent set to[/green]: {parent_key.strip().upper()}")
+
+        if not add_to_sprint:
+            return
+        if self._config.sprint_board_id is None:
+            console.print("[yellow]--sprint requested but no [sprint] board_id is set in config.toml; issue left in backlog.[/yellow]")
+            return
+        sprint = self._jira.get_active_sprint(self._config.sprint_board_id)
+        if sprint is None:
+            console.print(f"[yellow]No active sprint on board {self._config.sprint_board_id}; issue left in backlog.[/yellow]")
+            return
+        self._jira.add_issue_to_sprint(sprint["id"], issue.key)
+        console.print(f"[green]Added {issue.key} to current sprint[/green]: {sprint['name']}")
+
+    def update_task(
+        self,
+        issue_key: str,
+        status: str | None = None,
+        assignee: str | None = None,
+        parent_key: str | None = None,
+        components: list[str] | None = None,
+    ) -> None:
+        """Update an existing issue's workflow status, assignee, parent, and/or components."""
+        if status is None and assignee is None and parent_key is None and components is None:
+            console.print("[red]--update requires --status, --assignee, --parent, and/or --components[/red]")
+            return
+        if status is not None:
+            self._jira.transition_issue(issue_key, status)
+            console.print(f"[green]{issue_key} moved to status[/green]: {status}")
+        if assignee is not None:
+            account_id = self._resolve_assignee(assignee, issue_key=issue_key)
+            self._jira.assign_issue(issue_key, account_id)
+            console.print(f"[green]{issue_key} assignee updated[/green]: {assignee}")
+        if parent_key is not None:
+            self._jira.set_parent(issue_key, parent_key)
+            console.print(f"[green]{issue_key} parent set to[/green]: {parent_key.strip().upper()}")
+        if components is not None:
+            project_key = issue_key.strip().upper().split("-")[0]
+            resolved_components = self._jira.resolve_component_names(project_key, components)
+            self._jira.set_components(issue_key, resolved_components)
+            console.print(f"[green]{issue_key} components set to[/green]: {', '.join(resolved_components)}")
+
     def show_task_details(self, issue_keys: list[str]) -> None:
         """Show details only for the requested Jira issues."""
         for issue_key in issue_keys:
@@ -203,6 +342,8 @@ class PlannerApp:
                 ("Assignee", issue.assignee),
                 ("Reporter", issue.reporter),
                 ("Priority", issue.priority),
+                ("Parent", issue.parent),
+                ("Components", issue.components),
                 ("Created", issue.created),
                 ("Updated", issue.updated),
                 ("Description", issue.description or "-"),
@@ -466,6 +607,99 @@ class PlannerApp:
             except ValueError:
                 console.print("[red]Expected format YYYY-MM-DD[/red]")
 
+    # -- non-interactive logging ------------------------------------------
+    def _resolve_issue_key(self, raw: str) -> str:
+        raw = raw.strip()
+        # A bare number is completed with the configured project prefix.
+        return f"{self._config.default_project}-{raw}" if raw.isdigit() else raw.upper()
+
+    def _parse_log_entry(self, spec: str) -> tuple[str, float, str]:
+        parts = spec.split(":", 2)
+        if len(parts) < 2:
+            raise ValueError(f"Invalid --log entry {spec!r}; expected ISSUE:HOURS[:DESCRIPTION]")
+        issue_key = self._resolve_issue_key(parts[0])
+        try:
+            hours = float(parts[1])
+        except ValueError as exc:
+            raise ValueError(f"Invalid hours in --log entry {spec!r}: {parts[1]!r}") from exc
+        description = parts[2].strip() if len(parts) == 3 and parts[2].strip() else self._jira.get_issue(issue_key).summary
+        return issue_key, hours, description
+
+    def log_day(
+        self,
+        day: date,
+        use_default_meetings: bool,
+        manual_specs: list[str],
+        split_rest: list[str],
+    ) -> None:
+        """Non-interactively log worklogs for a single day and persist them."""
+        entries: list[Entry] = []
+
+        if use_default_meetings:
+            meeting_entries = self.board.build_meeting_entries(day)
+            if meeting_entries:
+                self.board.commit(meeting_entries)
+                entries.extend(meeting_entries)
+                slots = ", ".join(f"{entry.interval} {entry.issue}" for entry in meeting_entries)
+                console.print(f"[dim]{label(day)}: default meetings added -[/dim] {slots}")
+            else:
+                console.print(f"[dim]{label(day)}: no default meetings missing.[/dim]")
+
+        for spec in manual_specs:
+            issue_key, hours, description = self._parse_log_entry(spec)
+            minutes = round_to_slot(round(hours * 60), self._config.min_slot_minutes)
+            remaining = self.board.remaining_minutes(day)
+            allowed = min(minutes, remaining)
+            if allowed <= 0:
+                console.print(f"[yellow]{label(day)} is already full, skipping {issue_key}.[/yellow]")
+                continue
+            planned, unplaced = self.board.plan_task(day, issue_key, description, allowed)
+            if unplaced:
+                console.print(
+                    f"[red]{label(day)}: {minutes_to_hours(unplaced):.2f}h of {issue_key} "
+                    f"does not fit in the working window and will be skipped.[/red]"
+                )
+            if not planned:
+                continue
+            self.board.commit(planned)
+            entries.extend(planned)
+            slots = ", ".join(str(entry.interval) for entry in planned)
+            console.print(f"{label(day)}  {issue_key}  [bold]{slots}[/bold]")
+
+        if split_rest:
+            resolved = [self._resolve_issue_key(key) for key in split_rest]
+            remaining = self.board.remaining_minutes(day)
+            if remaining <= 0:
+                console.print(f"[yellow]{label(day)}: no remaining time left to split.[/yellow]")
+            else:
+                count = len(resolved)
+                base, extra = divmod(remaining, count)
+                shares = [base + (1 if i < extra else 0) for i in range(count)]
+                for issue_key, share_minutes in zip(resolved, shares):
+                    minutes = round_to_slot(share_minutes, self._config.min_slot_minutes)
+                    remaining_now = self.board.remaining_minutes(day)
+                    allowed = min(minutes, remaining_now)
+                    if allowed <= 0:
+                        continue
+                    description = self._jira.get_issue(issue_key).summary
+                    planned, unplaced = self.board.plan_task(day, issue_key, description, allowed)
+                    if unplaced:
+                        console.print(
+                            f"[red]{label(day)}: {minutes_to_hours(unplaced):.2f}h of {issue_key} "
+                            f"does not fit in the working window and will be skipped.[/red]"
+                        )
+                    if not planned:
+                        continue
+                    self.board.commit(planned)
+                    entries.extend(planned)
+                    slots = ", ".join(str(entry.interval) for entry in planned)
+                    console.print(f"{label(day)}  {issue_key}  [bold]{slots}[/bold]")
+
+        if not entries:
+            console.print("[yellow]Nothing to log.[/yellow]")
+            return
+        self._persist(entries, already_on_board=True)
+
     # -- persistence -----------------------------------------------------
     def _rollback(self, entries: list[Entry]) -> None:
         self.board.rollback(entries)
@@ -500,6 +734,47 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     task_args = parser.add_mutually_exclusive_group()
     task_args.add_argument("--tasks", action="store_true", help="List all Jira issues assigned to you and exit")
     task_args.add_argument("--task", nargs="+", metavar="ISSUE_KEY", help="Show details for specified Jira issue(s) and exit")
+    task_args.add_argument("--create-task", action="store_true", help="Create a new Jira issue and exit")
+    task_args.add_argument("--update", metavar="ISSUE_KEY", help="Update an existing issue's status/assignee and exit")
+    task_args.add_argument("--assignable", metavar="ISSUE_KEY", help="List accounts assignable to this issue and exit")
+    task_args.add_argument("--assignable-project", metavar="PROJECT_KEY", help="List accounts assignable in this project and exit")
+    task_args.add_argument("--list-components", metavar="PROJECT_KEY", help="List components configured for this project and exit")
+    parser.add_argument("--project", metavar="KEY", help="Jira project key (required with --create-task)")
+    parser.add_argument("--summary", help="Summary for the new issue (required with --create-task)")
+    parser.add_argument("--description", default="", help="Description for the new issue")
+    parser.add_argument("--type", dest="issue_type", default="Task", help="Issue type for the new issue (default: Task)")
+    parser.add_argument("--sprint", action="store_true", help="With --create-task, add the new issue to the current active sprint (requires [sprint] board_id in config.toml)")
+    parser.add_argument(
+        "--assignee",
+        default=None,
+        help="Assignee for --create-task (default: 'me') or --update: 'me', 'none'/'unassigned', or a Jira name/email",
+    )
+    parser.add_argument("--status", help="With --update, transition the issue to this workflow status")
+    parser.add_argument("--parent", help="With --create-task/--update, set the parent issue key")
+    parser.add_argument(
+        "--components",
+        nargs="+",
+        metavar="NAME",
+        help="With --create-task/--update, set issue component(s) by name (matched against the project's real components)",
+    )
+    parser.add_argument("--log-day", help="Target date (YYYY-MM-DD) for --log/--default-meetings/--split-rest; defaults to today")
+    parser.add_argument(
+        "--default-meetings",
+        action="store_true",
+        help="Non-interactively log the default meeting schedule for --log-day",
+    )
+    parser.add_argument(
+        "--log",
+        nargs="+",
+        metavar="ISSUE:HOURS[:DESCRIPTION]",
+        help="Non-interactively log specific durations, e.g. PROJ-999:0.5:Support call",
+    )
+    parser.add_argument(
+        "--split-rest",
+        nargs="+",
+        metavar="ISSUE_KEY",
+        help="After --default-meetings/--log, split the day's remaining time evenly across these issues",
+    )
     parser.add_argument("--config", type=Path, help="Path to config.toml")
     parser.add_argument("--refresh", action="store_true", help="Ignore the local cache")
     parser.add_argument("--dry-run", action="store_true", help="Show what would be logged, POST nothing")
@@ -530,6 +805,51 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.tasks:
             app.show_tasks()
+            return 0
+        if args.create_task:
+            if not args.project or not args.summary:
+                console.print("[red]--create-task requires --project and --summary[/red]")
+                return 2
+            app.create_task(
+                args.project,
+                args.summary,
+                args.description,
+                args.issue_type,
+                add_to_sprint=args.sprint,
+                assignee=args.assignee or "me",
+                parent_key=args.parent,
+                components=args.components,
+            )
+            return 0
+        if args.update:
+            app.update_task(
+                args.update,
+                status=args.status,
+                assignee=args.assignee,
+                parent_key=args.parent,
+                components=args.components,
+            )
+            return 0
+        if args.assignable:
+            app.show_assignable_users(issue_key=args.assignable)
+            return 0
+        if args.assignable_project:
+            app.show_assignable_users(project_key=args.assignable_project)
+            return 0
+        if args.list_components:
+            app.show_components(args.list_components)
+            return 0
+        if args.default_meetings or args.log or args.split_rest:
+            log_day = (
+                datetime.strptime(args.log_day, "%Y-%m-%d").date() if args.log_day else date.today()
+            )
+            app.load_week(log_day, refresh=args.refresh)
+            app.log_day(
+                log_day,
+                use_default_meetings=args.default_meetings,
+                manual_specs=args.log or [],
+                split_rest=args.split_rest or [],
+            )
             return 0
         if args.task:
             app.show_task_details(args.task)

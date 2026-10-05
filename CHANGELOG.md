@@ -7,13 +7,21 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.3.0] - 2026-10-05
+
+### Added
+
+- `--task KEY [KEY ...]` to show summary, status, type, assignee, reporter,
+  priority, timestamps, and description for selected Jira issues
+
+## [0.2.0]
+
 ### Added
 
 - `--tasks` to list all Jira issues assigned to the authenticated user
 - Jira client support for creating issues and updating issue summaries and descriptions
-
-Interactive Jira browsing and CLI commands for creating or editing issues remain
-planned; see [ROADMAP.md](ROADMAP.md).
 
 ## [0.1.0] - 2026-09-28
 

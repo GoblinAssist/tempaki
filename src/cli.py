@@ -190,6 +190,26 @@ class PlannerApp:
             table.add_row(issue.key, issue.status, issue.summary)
         console.print(table)
 
+    def show_task_details(self, issue_keys: list[str]) -> None:
+        """Show details only for the requested Jira issues."""
+        for issue_key in issue_keys:
+            issue = self._jira.get_issue_details(issue_key)
+            table = Table(title=f"{issue.key}: {issue.summary}", box=box.SIMPLE)
+            table.add_column("Field", style="bold")
+            table.add_column("Value", overflow="fold")
+            for field, value in (
+                ("Status", issue.status),
+                ("Type", issue.issue_type),
+                ("Assignee", issue.assignee),
+                ("Reporter", issue.reporter),
+                ("Priority", issue.priority),
+                ("Created", issue.created),
+                ("Updated", issue.updated),
+                ("Description", issue.description or "-"),
+            ):
+                table.add_row(field, value or "-")
+            console.print(table)
+
     # -- phase 2 ---------------------------------------------------------
     def fill_default_meetings(self) -> None:
         pending: dict[date, list[Entry]] = {}
@@ -477,7 +497,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--week", help="Any date (YYYY-MM-DD) inside the target week; defaults to today")
     parser.add_argument("--day", help="Show what is logged on this date (YYYY-MM-DD) and exit")
     parser.add_argument("--activities", help="Show Tempo planned activities for this date (YYYY-MM-DD) and exit")
-    parser.add_argument("--tasks", action="store_true", help="List all Jira issues assigned to you and exit")
+    task_args = parser.add_mutually_exclusive_group()
+    task_args.add_argument("--tasks", action="store_true", help="List all Jira issues assigned to you and exit")
+    task_args.add_argument("--task", nargs="+", metavar="ISSUE_KEY", help="Show details for specified Jira issue(s) and exit")
     parser.add_argument("--config", type=Path, help="Path to config.toml")
     parser.add_argument("--refresh", action="store_true", help="Ignore the local cache")
     parser.add_argument("--dry-run", action="store_true", help="Show what would be logged, POST nothing")
@@ -508,6 +530,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.tasks:
             app.show_tasks()
+            return 0
+        if args.task:
+            app.show_task_details(args.task)
             return 0
         if target_day:
             app.load_week(target_day, refresh=args.refresh)

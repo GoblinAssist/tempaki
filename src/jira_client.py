@@ -37,6 +37,20 @@ class IssueInfo:
 
 
 @dataclass(frozen=True)
+class IssueDetails:
+    key: str
+    summary: str
+    status: str
+    issue_type: str
+    assignee: str
+    reporter: str
+    priority: str
+    created: str
+    updated: str
+    description: str
+
+
+@dataclass(frozen=True)
 class PlannedWork:
     """One day's worth of a Tempo plan (capacity planned, not yet logged)."""
 
@@ -125,6 +139,31 @@ class JiraClient:
             self._remember(self._get(f"/rest/api/3/issue/{key}", params={"fields": "summary,status"}))
         return self._issue_cache[key]
 
+    def get_issue_details(self, issue_key: str) -> IssueDetails:
+        """Fetch display details for one Jira issue."""
+        key = issue_key.strip().upper()
+        fields = self._get(
+            f"/rest/api/3/issue/{key}",
+            params={"fields": "summary,status,description,assignee,reporter,issuetype,priority,created,updated"},
+        ).get("fields", {})
+        status = fields.get("status") or {}
+        issue_type = fields.get("issuetype") or {}
+        assignee = fields.get("assignee") or {}
+        reporter = fields.get("reporter") or {}
+        priority = fields.get("priority") or {}
+        return IssueDetails(
+            key=key,
+            summary=fields.get("summary", ""),
+            status=status.get("name", "unknown"),
+            issue_type=issue_type.get("name", "unknown"),
+            assignee=assignee.get("displayName", "Unassigned"),
+            reporter=reporter.get("displayName", "Unknown"),
+            priority=priority.get("name", "None"),
+            created=fields.get("created", ""),
+            updated=fields.get("updated", ""),
+            description=self._adf_to_text(fields.get("description")),
+        )
+
     def create_issue(
         self,
         project_key: str,
@@ -169,6 +208,20 @@ class JiraClient:
             for line in description.splitlines()
         ]
         return {"type": "doc", "version": 1, "content": paragraphs}
+
+    @staticmethod
+    def _adf_to_text(value: object) -> str:
+        if isinstance(value, str):
+            return value
+        if not isinstance(value, dict):
+            return ""
+        node_type = value.get("type")
+        if node_type == "text":
+            return str(value.get("text", ""))
+        if node_type == "hardBreak":
+            return "\n"
+        text = "".join(JiraClient._adf_to_text(child) for child in value.get("content", []))
+        return f"{text}\n" if node_type in {"paragraph", "heading", "listItem", "blockquote"} else text
 
     def list_assigned_issues(self) -> list[IssueInfo]:
         """List all issues assigned to the authenticated Jira user."""

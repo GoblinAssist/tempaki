@@ -18,10 +18,13 @@ Usage:
     python3 cli.py --assignable PROJ-123
     python3 cli.py --list-components PROJ
     python3 cli.py --update PROJ-123 --components Component1
+    python3 cli.py --update PROJ-123 --comment "Plain text note"
+    python3 cli.py --update PROJ-123 --comment-table-file summary.json  # {"intro": "...", "headers": [...], "rows": [[...], ...]}
 """
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from datetime import date, datetime, timedelta
@@ -308,11 +311,28 @@ class PlannerApp:
         assignee: str | None = None,
         parent_key: str | None = None,
         components: list[str] | None = None,
+        remove_sprint: bool = False,
+        comment: str | None = None,
+        comment_table_file: Path | None = None,
     ) -> None:
-        """Update an existing issue's workflow status, assignee, parent, and/or components."""
-        if status is None and assignee is None and parent_key is None and components is None:
-            console.print("[red]--update requires --status, --assignee, --parent, and/or --components[/red]")
+        """Update an existing issue's workflow status, assignee, parent, components, and/or add a comment."""
+        if (
+            status is None
+            and assignee is None
+            and parent_key is None
+            and components is None
+            and not remove_sprint
+            and comment is None
+            and comment_table_file is None
+        ):
+            console.print(
+                "[red]--update requires --status, --assignee, --parent, --components, "
+                "--remove-sprint, --comment, and/or --comment-table-file[/red]"
+            )
             return
+        if remove_sprint:
+            self._jira.remove_issue_from_sprint(issue_key)
+            console.print(f"[green]{issue_key} removed from sprint[/green] (moved to backlog)")
         if status is not None:
             self._jira.transition_issue(issue_key, status)
             console.print(f"[green]{issue_key} moved to status[/green]: {status}")
@@ -328,6 +348,19 @@ class PlannerApp:
             resolved_components = self._jira.resolve_component_names(project_key, components)
             self._jira.set_components(issue_key, resolved_components)
             console.print(f"[green]{issue_key} components set to[/green]: {', '.join(resolved_components)}")
+        if comment is not None:
+            self._jira.add_comment(issue_key, comment)
+            console.print(f"[green]{issue_key} comment added[/green]")
+        if comment_table_file is not None:
+            spec = json.loads(comment_table_file.read_text())
+            self._jira.add_comment_with_table(
+                issue_key,
+                intro=spec.get("intro", ""),
+                headers=spec.get("headers"),
+                rows=spec.get("rows"),
+                tables=spec.get("tables"),
+            )
+            console.print(f"[green]{issue_key} table comment added[/green]")
 
     def show_task_details(self, issue_keys: list[str]) -> None:
         """Show details only for the requested Jira issues."""
@@ -744,6 +777,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--description", default="", help="Description for the new issue")
     parser.add_argument("--type", dest="issue_type", default="Task", help="Issue type for the new issue (default: Task)")
     parser.add_argument("--sprint", action="store_true", help="With --create-task, add the new issue to the current active sprint (requires [sprint] board_id in config.toml)")
+    parser.add_argument("--remove-sprint", action="store_true", help="With --update, remove the issue's sprint value (move it to the backlog)")
+    parser.add_argument("--comment", help="With --update, add a plain-text comment to the issue")
+    parser.add_argument(
+        "--comment-table-file",
+        type=Path,
+        help="With --update, add a comment rendered as a Jira table from a JSON file "
+        '({"intro": "...", "headers": [...], "rows": [[...], ...]})',
+    )
     parser.add_argument(
         "--assignee",
         default=None,
@@ -828,6 +869,9 @@ def main(argv: list[str] | None = None) -> int:
                 assignee=args.assignee,
                 parent_key=args.parent,
                 components=args.components,
+                remove_sprint=args.remove_sprint,
+                comment=args.comment,
+                comment_table_file=args.comment_table_file,
             )
             return 0
         if args.assignable:

@@ -347,6 +347,10 @@ class JiraClient:
         """Move an existing issue into the given sprint."""
         self._write("POST", f"/rest/agile/1.0/sprint/{sprint_id}/issue", {"issues": [issue_key]})
 
+    def remove_issue_from_sprint(self, issue_key: str) -> None:
+        """Clear the sprint value on an issue by moving it back to the backlog."""
+        self._write("POST", "/rest/agile/1.0/backlog/issue", {"issues": [issue_key]})
+
     def update_issue(
         self,
         issue_key: str,
@@ -365,6 +369,57 @@ class JiraClient:
         self._write("PUT", f"/rest/api/3/issue/{key}", {"fields": fields})
         self._issue_cache.pop(key, None)
         return self.get_issue(key)
+
+    def add_comment(self, issue_key: str, body: str) -> dict:
+        """Add a plain-text comment to an issue."""
+        key = issue_key.strip().upper()
+        return self._write("POST", f"/rest/api/3/issue/{key}/comment", {"body": self._description_document(body)})
+
+    def add_comment_with_table(
+        self,
+        issue_key: str,
+        intro: str,
+        headers: list[str] | None = None,
+        rows: list[list[str]] | None = None,
+        tables: list[dict] | None = None,
+    ) -> dict:
+        """Add a comment made of an intro paragraph followed by one or more ADF tables.
+
+        Either pass `headers`/`rows` for a single table, or `tables` as a list of
+        {"heading": str (optional), "headers": [...], "rows": [[...], ...]} for several.
+        """
+        key = issue_key.strip().upper()
+        content: list[dict] = []
+        for line in intro.splitlines():
+            content.append({"type": "paragraph", "content": [{"type": "text", "text": line}]} if line else {"type": "paragraph", "content": []})
+        if tables is None:
+            tables = [{"headers": headers, "rows": rows}]
+        for table in tables:
+            heading = table.get("heading")
+            if heading:
+                content.append({"type": "paragraph", "content": [{"type": "text", "text": heading, "marks": [{"type": "strong"}]}]})
+            content.append(self._table_node(table["headers"], table["rows"]))
+        body = {"type": "doc", "version": 1, "content": content}
+        return self._write("POST", f"/rest/api/3/issue/{key}/comment", {"body": body})
+
+    @staticmethod
+    def _table_node(headers: list[str], rows: list[list[str]]) -> dict:
+        def cell(text: str, header: bool) -> dict:
+            cell_type = "tableHeader" if header else "tableCell"
+            return {
+                "type": cell_type,
+                "content": [{"type": "paragraph", "content": [{"type": "text", "text": str(text)}] if str(text) else []}],
+            }
+
+        header_row = {"type": "tableRow", "content": [cell(h, header=True) for h in headers]}
+        body_rows = [
+            {"type": "tableRow", "content": [cell(value, header=False) for value in row]} for row in rows
+        ]
+        return {
+            "type": "table",
+            "attrs": {"isNumberColumnEnabled": False, "layout": "default"},
+            "content": [header_row, *body_rows],
+        }
 
     @staticmethod
     def _description_document(description: str) -> dict:
